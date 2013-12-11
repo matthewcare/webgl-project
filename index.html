@@ -1,0 +1,712 @@
+<html>
+    <head>
+        <title>UP605422</title>
+        <meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+        <script type="text/javascript" src="glMatrix.js"></script>
+        <script type="text/javascript" src="webgl-utils.js"></script>
+
+        <script id="shader-vs" type="x-shader/x-vertex">
+            attribute vec3 aVertexPosition;
+            attribute vec3 aVertexNormal;
+            attribute vec2 aTextureCoordinates;
+
+            uniform mat4 uMVMatrix;
+            uniform mat4 uPMatrix;
+            uniform mat3 uNMatrix;
+
+            varying vec2 vTextureCoordinates;
+            varying vec3 vNormalEye;
+            varying vec3 vPositionEye3;
+
+            void main() {
+                vec4 vertexPositionEye4 = uMVMatrix * vec4(aVertexPosition, 1.0);
+                vPositionEye3 = vertexPositionEye4.xyz / vertexPositionEye4.w;
+
+                vNormalEye = normalize(uNMatrix * aVertexNormal);
+
+                gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+                vTextureCoordinates = aTextureCoordinates;
+            }
+        </script>
+
+        <script id="shader-fs" type="x-shader/x-fragment">
+            precision mediump float;
+            varying vec2 vTextureCoordinates;
+            varying vec3 vNormalEye;
+            varying vec3 vPositionEye3;
+
+            uniform vec3 uLightPosition;
+            uniform vec3 uAmbientLightColor;
+            uniform vec3 uDiffuseLightColor;
+            uniform vec3 uSpecularLightColor;
+            uniform sampler2D uSampler;
+
+            const float shininess = 64.0;
+
+            void main() {
+                vec3 vectorToLightSource = normalize(uLightPosition - vPositionEye3);
+
+                float diffuseLightWeighting = max(dot(vNormalEye, vectorToLightSource), 0.0);
+
+                vec3 reflectionVector = normalize(reflect(-vectorToLightSource, vNormalEye));
+
+                vec3 viewVectorEye = -normalize(vPositionEye3);
+
+                float rdotv = max(dot(reflectionVector, viewVectorEye), 0.0);
+                float specularLightWeighting = pow(rdotv, shininess);
+
+                vec3 lightWeighting = uAmbientLightColor + 
+                uDiffuseLightColor * diffuseLightWeighting + 
+                uSpecularLightColor * specularLightWeighting;
+
+                vec4 texelColor = texture2D(uSampler, vTextureCoordinates);
+                gl_FragColor = vec4(lightWeighting.rgb * texelColor.rgb, texelColor.a);
+            }
+        </script>
+
+        <script type="text/javascript">
+
+            var gl,
+                canvas
+                pwgl = {},
+                transY = 0, transX = 0, transZ = 0,
+                xRot = yRot = zRot = xOffs = yOffs = drag = 0,
+                pwgl.listOfPressedKeys = [];
+
+            function createGLContext(canvas) {
+                var names = ["webgl", "experimental-webgl"];
+                var context = null;
+                for (var i=0; i < names.length; i++) {
+                    try {
+                    context = canvas.getContext(names[i]);
+                    } catch(e) {}
+                    if (context) {
+                        break;
+                    }
+                }
+                if (context) {
+                    context.viewportWidth = canvas.width;
+                    context.viewportHeight = canvas.height;
+                } else {
+                    alert("Failed to create WebGL context!");
+                }
+                return context;
+            }
+
+
+            function loadShaderFromDOM(id) {
+                var shaderScript = document.getElementById(id);
+
+                if (!shaderScript) {
+                    return null;
+                }
+
+                var shaderSource = "";
+                var currentChild = shaderScript.firstChild;
+
+                while (currentChild) {
+                    if (currentChild.nodeType == 3) { 
+                        shaderSource += currentChild.textContent;
+                    }
+                    currentChild = currentChild.nextSibling;
+                }
+
+                var shader;
+                if (shaderScript.type == "x-shader/x-fragment") {
+                    shader = gl.createShader(gl.FRAGMENT_SHADER);
+                    } else if (shaderScript.type == "x-shader/x-vertex") {
+                        shader = gl.createShader(gl.VERTEX_SHADER);
+                    } else {
+                        return null;
+                    }
+
+                    gl.shaderSource(shader, shaderSource);
+                    gl.compileShader(shader);
+                    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)   
+                    &&!gl.isContextLost()) {
+                    alert("compiler")
+                    alert(gl.getShaderInfoLog(shader));
+                    return null;
+                } 
+                return shader;
+            }
+
+            function setupShaders() {
+                var fragmentShader = loadShaderFromDOM("shader-fs");
+                var vertexShader = loadShaderFromDOM("shader-vs");
+
+                shaderProgram = gl.createProgram();
+                gl.attachShader(shaderProgram, vertexShader);
+                gl.attachShader(shaderProgram, fragmentShader);
+                gl.linkProgram(shaderProgram);
+
+                if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS) 
+                    &&!gl.isContextLost()) {
+                    alert("Failed to link shaders: " + 
+                    gl.getProgramInfoLog(shaderProgram));
+                }
+
+                gl.useProgram(shaderProgram);
+
+                pwgl.vertexPositionAttributeLoc = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+                pwgl.vertexTextureAttributeLoc = gl.getAttribLocation(shaderProgram, "aTextureCoordinates");
+                pwgl.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+                pwgl.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+                pwgl.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+
+                pwgl.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+                pwgl.vertexNormalAttributeLoc = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+
+                pwgl.uniformLightPositionLoc =gl.getUniformLocation(shaderProgram, "uLightPosition");
+                pwgl.uniformAmbientLightColorLoc = gl.getUniformLocation(shaderProgram, "uAmbientLightColor");
+                pwgl.uniformDiffuseLightColorLoc = gl.getUniformLocation(shaderProgram, "uDiffuseLightColor");
+                pwgl.uniformSpecularLightColorLoc = gl.getUniformLocation(shaderProgram, "uSpecularLightColor");
+                
+                gl.enableVertexAttribArray(pwgl.vertexPositionAttributeLoc);
+                gl.enableVertexAttribArray(pwgl.vertexNormalAttributeLoc);
+                gl.enableVertexAttribArray(pwgl.vertexTextureAttributeLoc);
+
+                pwgl.modelViewMatrix = mat4.create(); 
+                pwgl.projectionMatrix = mat4.create();
+                pwgl.modelViewMatrixStack = [];
+            }
+
+            function setupTexture() {
+                pwgl.earthTexture = gl.createTexture();
+                loadImageForTexture("earth.jpg", pwgl.earthTexture);
+
+                pwgl.greySatelliteTexture = gl.createTexture();
+                loadImageForTexture("greySide.jpg", pwgl.greySatelliteTexture);
+
+                pwgl.goldSatelliteTexture = gl.createTexture();
+                loadImageForTexture("goldSide.jpg", pwgl.goldSatelliteTexture);
+            }
+
+            function loadImageForTexture(url, texture) {
+                var image = new Image();
+                image.onload = function() {
+                    textureFinishedLoading(image, texture);
+                }
+                image.src = url;
+            }
+
+            function textureFinishedLoading(image, texture) {
+                gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+                gl.generateMipmap(gl.TEXTURE_2D);
+
+                gl.bindTexture(gl.TEXTURE_2D, null);
+            }
+
+
+            function pushModelViewMatrix() {
+                var copyToPush = mat4.create(pwgl.modelViewMatrix);
+                pwgl.modelViewMatrixStack.push(copyToPush);
+            }
+
+            function popModelViewMatrix() {
+                if (pwgl.modelViewMatrixStack.length == 0) {
+                    throw "Error popModelViewMatrix() - Stack was empty ";
+                }
+                pwgl.modelViewMatrix = pwgl.modelViewMatrixStack.pop();
+            }
+
+            function uploadNormalMatrixToShader() {
+                gl.uniformMatrix4fv(pwgl.pMatrixUniform, false, pwgl.projectionMatrix);
+                gl.uniformMatrix4fv(pwgl.mvMatrixUniform, false, pwgl.modelViewMatrix);
+
+                var normalMatrix = mat3.create();
+                mat4.toInverseMat3(pwgl.modelViewMatrix, normalMatrix);
+                mat3.transpose(normalMatrix);
+                gl.uniformMatrix3fv(pwgl.nMatrixUniform, false, normalMatrix);
+            }
+
+            function setupEarthBuffers() {
+                var latitude = 50,
+                    longitude = 50,
+                    radius = 5,
+                    vertexPositionData = [],
+                    normalPositionData = [],
+                    textureCoordinateData = [];
+
+                for (var latitudeNumber = 0; latitudeNumber <= latitude; latitudeNumber++) {
+                    var theta = latitudeNumber * Math.PI / latitude;
+                    var sinTheta = Math.sin(theta);
+                    var cosTheta = Math.cos(theta);
+
+                    for (var longitudeNumber = 0; longitudeNumber <= longitude; longitudeNumber++) {
+                        var phi = longitudeNumber * 2 * Math.PI / longitude;
+                        var sinPhi = Math.sin(phi);
+                        var cosPhi = Math.cos(phi);
+
+                        var x = cosPhi * sinTheta;
+                        var y = cosTheta;
+                        var z = sinPhi * sinTheta;
+                        var u = 1 - (longitudeNumber / longitude);
+                        var v = 1 - (latitudeNumber / latitude);
+
+                        normalPositionData.push(x);
+                        normalPositionData.push(y);
+                        normalPositionData.push(z);
+                        textureCoordinateData.push(u);
+                        textureCoordinateData.push(v);
+                        vertexPositionData.push(radius * x);
+                        vertexPositionData.push(radius * y);
+                        vertexPositionData.push(radius * z);
+                    }
+                }
+
+                var vertexIndexData = [];
+                for (var latitudeNumber = 0; latitudeNumber < latitude; latitudeNumber++) {
+                    for (var longitudeNumber = 0; longitudeNumber < longitude; longitudeNumber++) {
+                        var first = (latitudeNumber * (longitude + 1)) + longitudeNumber;
+                        var second = first + longitude + 1;
+                        vertexIndexData.push(first);
+                        vertexIndexData.push(second);
+                        vertexIndexData.push(first + 1);
+
+                        vertexIndexData.push(second);
+                        vertexIndexData.push(second + 1);
+                        vertexIndexData.push(first + 1);
+                    }
+                }
+
+                pwgl.earthVertexNormalBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexNormalBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normalPositionData), gl.STATIC_DRAW);
+                pwgl.earthVertexNormalBuffer.itemSize = 3;
+                pwgl.earthVertexNormalBuffer.numItems = normalPositionData.length / 3;
+
+                pwgl.earthVertexTextureCoordinateBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexTextureCoordinateBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoordinateData), gl.STATIC_DRAW);
+                pwgl.earthVertexTextureCoordinateBuffer.itemSize = 2;
+                pwgl.earthVertexTextureCoordinateBuffer.numItems = textureCoordinateData.length / 2;
+
+                pwgl.earthVertexPositionBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexPositionBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertexPositionData), gl.STATIC_DRAW);
+                pwgl.earthVertexPositionBuffer.itemSize = 3;
+                pwgl.earthVertexPositionBuffer.numItems = vertexPositionData.length / 3;
+
+                pwgl.earthVertexIndexBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.earthVertexIndexBuffer);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(vertexIndexData), gl.STATIC_DRAW);
+                pwgl.earthVertexIndexBuffer.itemSize = 1;
+                pwgl.earthVertexIndexBuffer.numItems = vertexIndexData.length;
+            }
+
+            function setupSatelliteBuffers() {
+                var satelliteVertexPosition = [
+                // Front face
+                1.0,  1.0,  1.0, //v0
+                -1.0,  1.0,  1.0, //v1
+                -1.0, -1.0,  1.0, //v2
+                1.0, -1.0,  1.0, //v3
+
+                // Back face
+                1.0,  1.0, -1.0, //v4
+                -1.0,  1.0, -1.0, //v5
+                -1.0, -1.0, -1.0, //v6
+                1.0, -1.0, -1.0, //v7
+
+                // Left face
+                -1.0,  1.0,  1.0, //v8
+                -1.0,  1.0, -1.0, //v9
+                -1.0, -1.0, -1.0, //v10
+                -1.0, -1.0,  1.0, //v11
+
+                // Right face
+                1.0,  1.0,  1.0, //12
+                1.0, -1.0,  1.0, //13
+                1.0, -1.0, -1.0, //14
+                1.0,  1.0, -1.0, //15
+
+                // Top face
+                1.0,  1.0,  1.0, //v16
+                1.0,  1.0, -1.0, //v17
+                -1.0,  1.0, -1.0, //v18
+                -1.0,  1.0,  1.0, //v19
+
+                // Bottom face
+                1.0, -1.0,  1.0, //v20
+                1.0, -1.0, -1.0, //v21
+                -1.0, -1.0, -1.0, //v22
+                -1.0, -1.0,  1.0, //v23
+                ];
+
+                var satelliteVertexIndices = [
+                0, 1, 2,      0, 2, 3,    // Front face
+                4, 6, 5,      4, 7, 6,    // Back face
+                8, 9, 10,     8, 10, 11,  // Left face
+                12, 13, 14,   12, 14, 15, // Right face
+                16, 17, 18,   16, 18, 19, // Top face
+                20, 22, 21,   20, 23, 22  // Bottom face
+                ];
+
+                // Setup buffer with texture coordinates
+                var textureCoordinates = [
+                //Front face
+                0.0, 0.0, //v0
+                1.0, 0.0, //v1
+                1.0, 1.0, //v2
+                0.0, 1.0, //v3
+
+                // Back face
+                0.0, 1.0, //v4
+                1.0, 1.0, //v5
+                1.0, 0.0, //v6
+                0.0, 0.0, //v7
+
+                // Left face
+                0.0, 1.0, //v1
+                1.0, 1.0, //v5
+                1.0, 0.0, //v6
+                0.0, 0.0, //v2
+
+                // Right face
+                0.0, 1.0, //v0
+                1.0, 1.0, //v3
+                1.0, 0.0, //v7
+                0.0, 0.0, //v4
+
+                // Top face
+                0.0, 1.0, //v0
+                1.0, 1.0, //v4
+                1.0, 0.0, //v5
+                0.0, 0.0, //v1
+
+                // Bottom face
+                0.0, 1.0, //v3
+                1.0, 1.0, //v7
+                1.0, 0.0, //v6
+                0.0, 0.0, //v2
+                ];
+
+                var satelliteVertexNormals = [
+                // Front face
+                0.0,  0.0,  1.0, //v0
+                0.0,  0.0,  1.0, //v1
+                0.0,  0.0,  1.0, //v2
+                0.0,  0.0,  1.0, //v3
+
+                // Back face
+                0.0,  0.0, -1.0, //v4
+                0.0,  0.0, -1.0, //v5
+                0.0,  0.0, -1.0, //v6
+                0.0,  0.0, -1.0, //v7
+
+                // Left face
+                -1.0,  0.0,  0.0, //v1
+                -1.0,  0.0,  0.0, //v5
+                -1.0,  0.0,  0.0, //v6
+                -1.0,  0.0,  0.0, //v2
+
+                // Right face
+                1.0,  0.0,  0.0, //0
+                1.0,  0.0,  0.0, //3
+                1.0,  0.0,  0.0, //7
+                1.0,  0.0,  0.0, //4
+
+                // Top face
+                0.0,  1.0,  0.0, //v0
+                0.0,  1.0,  0.0, //v4
+                0.0,  1.0,  0.0, //v5
+                0.0,  1.0,  0.0, //v1
+
+                // Bottom face
+                0.0, -1.0,  0.0, //v3
+                0.0, -1.0,  0.0, //v7
+                0.0, -1.0,  0.0, //v6
+                0.0, -1.0,  0.0, //v2
+                ];
+
+                pwgl.satelliteVertexPositionBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexPositionBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(satelliteVertexPosition), gl.STATIC_DRAW);
+                pwgl.satelliteVertexPositionBuffer.itemSize = 3;
+                pwgl.satelliteVertexPositionBuffer.numItems = 24;
+                
+                pwgl.satelliteVertexIndexBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.satelliteVertexIndexBuffer);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(satelliteVertexIndices), gl.STATIC_DRAW);
+                pwgl.satelliteVertexIndexBuffer.itemSize = 1;
+                pwgl.satelliteVertexIndexBuffer.numItems = 36;
+
+                pwgl.satelliteVertexTextureCoordinateBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexTextureCoordinateBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoordinates),gl.STATIC_DRAW);
+                pwgl.satelliteVertexTextureCoordinateBuffer.itemSize = 2;
+                pwgl.satelliteVertexTextureCoordinateBuffer.numItems = 24;
+
+                pwgl.satelliteVertexNormalBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexNormalBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(satelliteVertexNormals), gl.STATIC_DRAW);
+                pwgl.satelliteVertexNormalBuffer.itemSize = 3;
+                pwgl.satelliteVertexNormalBuffer.numItems = 24;
+            }
+
+
+
+
+            function drawEarth() {
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.earthTexture);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexPositionBuffer);
+                gl.vertexAttribPointer(pwgl.vertexPositionAttributeLoc, pwgl.earthVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexTextureCoordinateBuffer);
+                gl.vertexAttribPointer(pwgl.textureCoordinateAttribute, pwgl.earthVertexTextureCoordinateBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexNormalBuffer);
+                gl.vertexAttribPointer(pwgl.vertexNormalAttributeLoc, pwgl.earthVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.earthVertexIndexBuffer);
+                gl.drawElements(gl.TRIANGLES, pwgl.earthVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
+            }
+
+            function drawSatellite() {
+                gl.activeTexture(gl.TEXTURE0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexPositionBuffer);
+                gl.vertexAttribPointer(pwgl.vertexPositionAttributeLoc, pwgl.satelliteVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexNormalBuffer);
+                gl.vertexAttribPointer(pwgl.vertexNormalAttributeLoc, pwgl.satelliteVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.satelliteVertexTextureCoordinateBuffer);
+                gl.vertexAttribPointer(pwgl.vertexTextureAttributeLoc, pwgl.satelliteVertexTextureCoordinateBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.satelliteVertexIndexBuffer);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.goldSatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.goldSatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 12);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.goldSatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 24);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.greySatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 36);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.goldSatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 48);
+
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.goldSatelliteTexture);
+                gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 60);
+            }
+
+
+            function degToRad(degrees) {
+                return degrees * Math.PI / 180;
+            }
+
+            function draw() {
+                handlePressedDownKeys();
+                mat4.translate(pwgl.modelViewMatrix, [transX, transY, transZ], pwgl.modelViewMatrix);
+                mat4.rotateX(pwgl.modelViewMatrix, xRot/50, pwgl.modelViewMatrix);
+                mat4.rotateY(pwgl.modelViewMatrix, yRot/50, pwgl.modelViewMatrix);
+
+                yRot = xRot = zRot = transY = transX = transZ = 0;
+
+                uploadNormalMatrixToShader();
+                gl.uniform1i(pwgl.uniformSamplerLoc, 0);
+
+                gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                pushModelViewMatrix();
+                mat4.rotateY(pwgl.modelViewMatrix, degToRad(pwgl.earthRotate), pwgl.modelViewMatrix);
+                uploadNormalMatrixToShader();
+                drawEarth();
+                popModelViewMatrix();
+
+                pushModelViewMatrix();
+                mat4.translate(pwgl.modelViewMatrix, [pwgl.x, pwgl.y, pwgl.z], pwgl.modelViewMatrix);
+                mat4.rotateY(pwgl.modelViewMatrix, Math.PI - pwgl.angle, pwgl.modelViewMatrix);
+                mat4.scale(pwgl.modelViewMatrix, [0.3, 0.3, 0.3], pwgl.modelViewMatrix);
+                uploadNormalMatrixToShader();
+                drawSatellite();
+                popModelViewMatrix();
+            }
+
+            function animate() {
+                pwgl.currentTime = new Date().getTime();
+                if (pwgl.animationStartTime === undefined) {
+                    pwgl.animationStartTime = pwgl.currentTime;
+                }  
+                if (pwgl.lastTime != 0) {
+                    var elapsed = pwgl.currentTime - pwgl.lastTime;
+                    pwgl.earthRotate += elapsed / 50.0;
+                    pwgl.angle += elapsed / pwgl.orbitSpeed;
+                    pwgl.x = Math.cos(pwgl.angle) * pwgl.circleRadius;
+                    pwgl.z = Math.sin(pwgl.angle) * pwgl.circleRadius;
+                }
+                pwgl.lastTime = pwgl.currentTime;
+            }
+
+            function setupBuffers() {
+                setupEarthBuffers();
+                setupSatelliteBuffers();
+            }
+
+            function setupLights() {
+                gl.uniform3fv(pwgl.uniformLightPositionLoc, [20.0, 60.0, 0.0]);
+                gl.uniform3fv(pwgl.uniformAmbientLightColorLoc, [0.2, 0.2, 0.2]);
+                gl.uniform3fv(pwgl.uniformDiffuseLightColorLoc, [0.8, 0.8, 0.8]);
+                gl.uniform3fv(pwgl.uniformSpecularLightColorLoc, [0.9, 0.9, 0.9]);
+            }
+
+            function init() {
+                setupShaders();
+                setupBuffers();
+                setupTexture();
+                setupLights();
+                gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                gl.enable(gl.DEPTH_TEST);
+
+                mat4.perspective(60, gl.viewportWidth / gl.viewportHeight, 1, 100.0, pwgl.projectionMatrix);
+                mat4.identity(pwgl.modelViewMatrix);
+                mat4.lookAt([0, 0, 20],[0, 0, 0], [0, 1, 0], pwgl.modelViewMatrix);
+
+                pwgl.orbitSpeed = 900;
+                pwgl.x = 0.0;
+                pwgl.y = 0.0;
+                pwgl.z = 0.0;
+                pwgl.circleRadius = 10.0;
+                pwgl.angle = 0;
+                pwgl.earthRotate = 0;
+                pwgl.lastTime = 0;
+            }
+
+            function mymousedown(ev) {
+                drag  = 1;
+                xOffs = ev.clientX;  
+                yOffs = ev.clientY;
+            }
+
+            function mymouseup(ev) {
+                drag  = 0;
+            }
+
+            function mymousemove(ev) {
+                if ( drag == 0 ) return;
+                if ( ev.shiftKey ) {
+                        transX = (ev.clientX - xOffs)/10;
+                    }
+                if (ev.altKey) {
+                        transY = -(ev.clientY - yOffs)/10;
+                }
+                if (!ev.shiftKey && !ev.altKey) {
+                    yRot = - xOffs + ev.clientX;  
+                    xRot = - yOffs + ev.clientY; 
+                }
+
+                xOffs = ev.clientX;   
+                yOffs = ev.clientY;
+            }
+
+            function wheelHandler(ev) {
+                if (ev.altKey) transY = ev.detail / 10;
+                else transZ = -ev.detail / 10;
+                ev.preventDefault();
+            }
+
+            function handleContextLost(event) {
+                event.preventDefault();
+                cancelRequestAnimFrame(pwgl.requestId);
+                for (var i = 0; i < pwgl.ongoingImageLoads.length; i++) {
+                    pwgl.ongoingImageLoads[i].onload = undefined;
+                }
+                pwgl.ongoingImageLoads = [];
+            }
+
+            function handleContextRestored(event) {
+                init();
+                pwgl.requestId = requestAnimFrame(draw,canvas);
+            }
+
+            function handleKeyDown(event) {
+                pwgl.listOfPressedKeys[event.keyCode] = true;
+            }
+
+            function handleKeyUp(event) {
+                pwgl.listOfPressedKeys[event.keyCode] = false;
+            }
+
+            function handlePressedDownKeys() {
+                if (pwgl.listOfPressedKeys[38] && pwgl.circleRadius < 20) {
+                    // Arrow up, increase radius of orbit
+                    pwgl.circleRadius += 0.1;
+                }
+
+                if (pwgl.listOfPressedKeys[40] && pwgl.circleRadius > 7) {
+                    // Arrow down, decrease radius of orbit
+                    pwgl.circleRadius -= 0.1;
+                }
+
+                if (pwgl.listOfPressedKeys[39] && pwgl.orbitSpeed > 100) {
+                    // Arrow right, increase speed of orbit
+                    pwgl.orbitSpeed -= 10;
+                }
+
+                if (pwgl.listOfPressedKeys[37] && pwgl.orbitSpeed < 2000) {
+                    // Arrow down, decrease radius of orbit
+                    pwgl.orbitSpeed += 1;
+                }
+            }
+
+            function start() {
+                requestAnimFrame(start);
+                draw();
+                animate();
+            }
+
+            function startup() {
+                canvas = document.getElementById("canvas");
+                canvas.height = window.innerHeight;
+                canvas.width = window.innerWidth;
+                canvas.addEventListener('webglcontextlost', handleContextLost, false);
+                canvas.addEventListener('webglcontextrestored', handleContextRestored, 
+                false);
+                document.addEventListener('keydown', handleKeyDown, false);
+                document.addEventListener('keyup', handleKeyUp, false);
+
+                canvas.onmousedown = mymousedown;
+                document.onmouseup = mymouseup;
+                document.onmousemove = mymousemove;
+
+                canvas.addEventListener('mousewheel', wheelHandler, false);
+                canvas.addEventListener('DOMMouseScroll', wheelHandler, false);
+
+                window.addEventListener('resize', function() {
+                    canvas.height = window.innerHeight;
+                    canvas.width = window.innerWidth;
+                    createGLContext(canvas);
+                    mat4.perspective(60, gl.viewportWidth / gl.viewportHeight, 1, 100.0, pwgl.projectionMatrix);
+                }, false)
+
+                gl = createGLContext(canvas);
+
+                init();
+                start();
+            }
+        </script>
+        <style>
+        *{overflow: hidden; border: none;padding: 0; margin: 0;}
+        </style>
+    </head>
+
+
+    <body onload="startup();">
+        <canvas id="canvas"></canvas>
+    </body>
+
+</html>
