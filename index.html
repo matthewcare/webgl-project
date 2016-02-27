@@ -185,10 +185,10 @@
 
             function loadImageForTexture(url, texture) {
                 var image = new Image();
+                image.src = url;
                 image.onload = function() {
                     textureFinishedLoading(image, texture);
                 }
-                image.src = url;
             }
 
             function textureFinishedLoading(image, texture) {
@@ -455,18 +455,18 @@
 
             function drawEarth() {
                 gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, pwgl.earthTexture);
 
                 gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexPositionBuffer);
                 gl.vertexAttribPointer(pwgl.vertexPositionAttributeLoc, pwgl.earthVertexPositionBuffer.itemSize, gl.FLOAT, false, 0, 0);
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexTextureCoordinateBuffer);
-                gl.vertexAttribPointer(pwgl.textureCoordinateAttribute, pwgl.earthVertexTextureCoordinateBuffer.itemSize, gl.FLOAT, false, 0, 0);
-
                 gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexNormalBuffer);
                 gl.vertexAttribPointer(pwgl.vertexNormalAttributeLoc, pwgl.earthVertexNormalBuffer.itemSize, gl.FLOAT, false, 0, 0);
 
+                gl.bindBuffer(gl.ARRAY_BUFFER, pwgl.earthVertexTextureCoordinateBuffer);
+                gl.vertexAttribPointer(pwgl.vertexTextureAttributeLoc, pwgl.earthVertexTextureCoordinateBuffer.itemSize, gl.FLOAT, false, 0, 0);
+
                 gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, pwgl.earthVertexIndexBuffer);
+                gl.bindTexture(gl.TEXTURE_2D, pwgl.earthTexture);
                 gl.drawElements(gl.TRIANGLES, pwgl.earthVertexIndexBuffer.numItems, gl.UNSIGNED_SHORT, 0);
             }
 
@@ -614,8 +614,8 @@
             }
 
             function wheelHandler(ev) {
-                if (ev.altKey) transY = ev.detail / 10;
-                else transZ = -ev.detail / 10;
+                if (ev.altKey) transY = -ev.wheelDelta / 40;
+                else transZ = ev.wheelDelta / 40;
                 ev.preventDefault();
             }
 
@@ -683,7 +683,7 @@
                 document.onmouseup = mymouseup;
                 document.onmousemove = mymousemove;
 
-                canvas.addEventListener('mousewheel', wheelHandler, false);
+                canvas.addEventListener('wheel', wheelHandler, false);
                 canvas.addEventListener('DOMMouseScroll', wheelHandler, false);
 
                 window.addEventListener('resize', function() {
